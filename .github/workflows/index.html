@@ -57,6 +57,11 @@ input[type=range]{width:100%;accent-color:var(--k);height:28px;margin:0}
 .pg button{overflow:hidden;word-break:break-word}
 .dr.edit .pg button{outline:2px dashed var(--ink);outline-offset:-4px}
 .pg button.cu{box-shadow:inset 0 0 0 3px #1a0f2e}
+.ed[hidden]{display:none}
+.ed input{height:44px;border-radius:10px;border:0;padding:0 10px;background:#120a22;color:var(--ink);font:inherit;min-width:0}
+.q select{width:100%;height:40px;border-radius:10px;border:0;background:#120a22;color:var(--ink);font:inherit;padding:0 8px}
+.q .tools{margin:8px 0;grid-template-columns:1fr 1fr 1fr}.q .tools button{font-size:12px;padding:8px 4px}
+.q .fi{margin-top:8px}
 </style></head>
 <body>
 <canvas id="bg"></canvas>
@@ -72,6 +77,7 @@ const bq=(t,f,g=0)=>{const n=AC.createBiquadFilter();n.type=t;n.frequency.value=
 const gn=v=>{const n=AC.createGain();n.gain.value=v;return n};
 function ir(){const n=AC.sampleRate*2,b=AC.createBuffer(2,n,AC.sampleRate);for(let c=0;c<2;c++){const d=b.getChannelData(c);for(let i=0;i<n;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/n,3)}return b}
 const IR=ir();
+const Q=[];let autoOn=false,trm=0,busy=false,pre=null,tsel=-1;
 const T=(p,v)=>p.setTargetAtTime(v,AC.currentTime,.02);
 const fmt=s=>isFinite(s)?Math.floor(s/60)+":"+String(Math.floor(s%60)).padStart(2,"0"):"0:00";
 
@@ -93,48 +99,72 @@ const tpl=(L,c)=>`<section class="deck ${c}"><header><b>${L}</b><span class="nm"
 const app=document.getElementById("app");
 app.innerHTML=`<section class="tools"><button id="openFx">Efectos</button><button id="bgBtn">Fondo</button></section>`+tpl("A","a")+tpl("B","b")+
 `<section class="cross"><div><span>A</span><span>Crossfader</span><span>B</span></div><input id="cf" type="range" min="0" max="100" value="50" style="width:100%"></section>
+<section class="cross q" style="--k:var(--c)"><b>Cola y auto-mezcla</b>
+<input class="fi" id="qf" type="file" multiple accept="audio/*">
+<p class="hint" id="ql">Cola vacía. Agrega canciones.</p>
+<section class="tools"><button id="am">Auto-mezcla: NO</button><button id="tr">Transición: Al azar</button><button id="qc">Vaciar cola</button></section>
+<label class="s">Sonido al empezar la transición<select id="ts"></select></label></section>
 `;
 
 function deck(root){
- const el=new Audio();el.preservesPitch=el.mozPreservesPitch=el.webkitPreservesPitch=false;
- const src=AC.createMediaElementSource(el);
+ const inp=gn(1),sg=gn(1);sg.connect(inp);
  const lo=bq("lowshelf",200),mi=bq("peaking",1000),hi=bq("highshelf",3500),fl=bq("lowpass",22000);
  mi.Q.value=1;
- src.connect(lo);lo.connect(mi);mi.connect(hi);hi.connect(fl);
- const bus=gn(1),gate=gn(1),vol=gn(.8),cross=gn(.7);
+ inp.connect(lo);lo.connect(mi);mi.connect(hi);hi.connect(fl);
+ const bus=gn(1),gate=gn(1),vol=gn(.8),tg=gn(1),cross=gn(.7);
  fl.connect(bus);
  const d=AC.createDelay(2);d.delayTime.value=.375;const fb=gn(.45),wD=gn(0);fl.connect(d);d.connect(wD);wD.connect(bus);d.connect(fb);fb.connect(d);
  const cv=AC.createConvolver();cv.buffer=IR;const wR=gn(0);fl.connect(cv);cv.connect(wR);wR.connect(bus);
  const fd=AC.createDelay(.1);fd.delayTime.value=.005;const lf=AC.createOscillator();lf.frequency.value=.3;const ld=gn(.003);lf.connect(ld);ld.connect(fd.delayTime);lf.start();
  const ff=gn(.5),wF=gn(0);fl.connect(fd);fd.connect(wF);wF.connect(bus);fd.connect(ff);ff.connect(fd);
  const gl=AC.createOscillator();gl.type="square";gl.frequency.value=6;const gd=gn(0);gl.connect(gd);gd.connect(gate.gain);gl.start();
- bus.connect(gate);gate.connect(vol);vol.connect(cross);cross.connect(master);
+ bus.connect(gate);gate.connect(vol);vol.connect(tg);tg.connect(cross);cross.connect(master);
  const fxs={eco:on=>T(wD.gain,on?.6:0),rev:on=>T(wR.gain,on?.9:0),fla:on=>T(wF.gain,on?.8:0),gate:on=>{gate.gain.value=on?.5:1;gd.gain.value=on?.5:0}};
- const rate=()=>{el.playbackRate=1+$(root,".pt").value/100};
- let cue=0,br=null,was=false;
- $(root,'input[type=file]').onchange=e=>{const f=e.target.files[0];if(!f)return;el.loop=false;el.src=URL.createObjectURL(f);$(root,".nm").textContent=f.name;cue=0;rate()};
- $(root,".play").onclick=()=>{AC.resume();if(!el.src)return;el.paused?el.play():el.pause()};
- $(root,".cue").onclick=()=>{if(!el.src)return;if(el.paused)cue=el.currentTime;else{el.pause();el.currentTime=cue}};
- const stopBr=()=>{if(br){clearInterval(br);br=null;if(was){rate();el.play()}was=false}};
+ const S={buf:null,rev:null,p0:0,t0:0,cur:0,src:null,play:false,cue:0,drag:false,was:false,ended:false};
+ const nm=$(root,".nm"),dur=()=>S.buf?S.buf.duration:0;
+ const now=()=>S.buf?(S.play&&S.src?Math.max(0,Math.min(dur(),S.p0+(AC.currentTime-S.t0)*S.cur)):S.p0):0;
+ const rate=()=>1+$(root,".pt").value/100;
+ const stopSrc=()=>{if(S.src){try{S.src.stop()}catch(e){}S.src.disconnect();S.src=null}};
+ const startSrc=r=>{stopSrc();const s=AC.createBufferSource();s.buffer=S.buf;s.playbackRate.value=r;s.connect(sg);s.start(0,S.p0);S.src=s;S.t0=AC.currentTime;S.cur=r};
+ const go=()=>{if(!S.buf)return;AC.resume();if(S.p0>=dur()-.05)S.p0=0;S.ended=false;S.play=true;startSrc(rate())};
+ const pause=()=>{S.p0=now();S.play=false;stopSrc()};
+ const chg=r=>{if(S.src){S.p0=now();S.t0=AC.currentTime;S.cur=r;S.src.playbackRate.value=r}};
+ const seek=t=>{S.p0=Math.max(0,Math.min(dur()-.05,t));if(S.play)startSrc(rate())};
+ const load=async(ab,name)=>{nm.textContent="Cargando…";try{pause();const b=await AC.decodeAudioData(ab);S.buf=b;S.rev=null;S.p0=0;S.cue=0;S.play=false;S.ended=false;nm.textContent=name}catch(e){nm.textContent="No se pudo leer ese audio"}};
+ const mkRev=()=>{if(S.rev||!S.buf)return;const b=S.buf,r=AC.createBuffer(b.numberOfChannels,b.length,b.sampleRate);for(let c=0;c<b.numberOfChannels;c++){const x=b.getChannelData(c),y=r.getChannelData(c);for(let i=0,n=x.length;i<n;i++)y[i]=x[n-1-i]}S.rev=r};
+ const slice=(ds,dt)=>{const a=Math.abs(ds);if(!S.buf||a<.002||dt<=0)return;
+  const r=Math.min(6,Math.max(.1,a/dt)),fw=ds>0,p=S.p0,t=AC.currentTime,L=Math.min(a*1.2,fw?dur()-p:p);if(L<=0)return;
+  const s=AC.createBufferSource(),g=gn(0),D2=L/r;s.buffer=fw?S.buf:S.rev;s.playbackRate.value=r;s.connect(g);g.connect(sg);
+  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(1,t+.004);g.gain.setValueAtTime(1,t+Math.max(.005,D2-.006));g.gain.linearRampToValueAtTime(0,t+D2);
+  s.start(t,fw?p:dur()-p,L);S.p0=Math.max(0,Math.min(dur(),p+ds))};
+ $(root,'input[type=file]').onchange=async e=>{const f=e.target.files[0];if(f)await load(await f.arrayBuffer(),f.name)};
+ $(root,".play").onclick=async()=>{AC.resume();if(!S.buf){if(await qLoad(api))go();return}S.play?pause():go()};
+ $(root,".cue").onclick=()=>{if(!S.buf)return;if(!S.play)S.cue=S.p0;else{pause();S.p0=S.cue}};
+ let br=null,bw=false;
+ const stopBr=()=>{if(br){clearInterval(br);br=null;if(bw)go();bw=false}};
  const brk=$(root,".brk");
- brk.onpointerdown=()=>{if(el.paused)return;was=true;let r=el.playbackRate;br=setInterval(()=>{r*=.9;if(r<.07){el.pause();clearInterval(br)}else el.playbackRate=r},40)};
+ brk.onpointerdown=()=>{if(!S.play)return;bw=true;let r=S.cur;br=setInterval(()=>{r*=.9;if(r<.07){pause();clearInterval(br)}else chg(r)},40)};
  ["pointerup","pointerleave","pointercancel"].forEach(ev=>brk.addEventListener(ev,stopBr));
  all(root,".fx button").forEach(b=>b.onclick=()=>{AC.resume();b.classList.toggle("on");fxs[b.dataset.f](b.classList.contains("on"))});
  $(root,".lo").oninput=e=>lo.gain.value=+e.target.value;
  $(root,".mi").oninput=e=>mi.gain.value=+e.target.value;
  $(root,".hi").oninput=e=>hi.gain.value=+e.target.value;
- $(root,".pt").oninput=rate;
+ $(root,".pt").oninput=()=>{if(S.play&&!br)chg(rate())};
  $(root,".vl").oninput=e=>vol.gain.value=e.target.value/100*1.1;
  $(root,".fl").oninput=e=>{const v=e.target.value/100;if(v<0){fl.type="lowpass";fl.frequency.value=20000*Math.pow(.01,-v)}else if(v>0){fl.type="highpass";fl.frequency.value=20*Math.pow(150,v)}else{fl.type="lowpass";fl.frequency.value=22000}};
- const w=$(root,".wheel");let ang=null;
+ const w=$(root,".wheel");let ang=null,lt=0;
  const a=e=>{const r=w.getBoundingClientRect();return Math.atan2(e.clientY-r.top-r.height/2,e.clientX-r.left-r.width/2)};
- w.onpointerdown=e=>{AC.resume();w.setPointerCapture(e.pointerId);ang=a(e)};
- w.onpointermove=e=>{if(ang===null||!el.src)return;let n=a(e),x=n-ang;if(x>Math.PI)x-=2*Math.PI;if(x<-Math.PI)x+=2*Math.PI;ang=n;el.currentTime=Math.max(0,el.currentTime+x/(2*Math.PI)*1.8)};
- w.onpointerup=w.onpointercancel=()=>ang=null;
- $(root,".bar").onpointerdown=e=>{if(!el.duration)return;const r=e.currentTarget.getBoundingClientRect();el.currentTime=(e.clientX-r.left)/r.width*el.duration};
- $(root,".url button").onclick=()=>{AC.resume();const u=$(root,".url input").value.trim();if(!u)return;el.loop=false;el.crossOrigin="anonymous";el.src=u;$(root,".nm").textContent=decodeURIComponent(u.split("?")[0].split("/").pop()||u);cue=0;rate();el.play().catch(()=>{})};
- el.onerror=()=>{if(el.src)$(root,".nm").textContent="No se pudo cargar. Ese enlace no permite mezclar."};
- return{cross,tick(){const t=el.currentTime;w.style.transform=`rotate(${t*200}deg)`;$(root,".bar u").style.width=(el.duration?t/el.duration*100:0)+"%";$(root,".tm").textContent=fmt(t)+" / "+fmt(el.duration);const p=$(root,".play");p.textContent=el.paused?"Play":"Pausa";p.classList.toggle("on",!el.paused)}}
+ w.onpointerdown=e=>{AC.resume();if(!S.buf)return;w.setPointerCapture(e.pointerId);mkRev();S.was=S.play;pause();S.drag=true;ang=a(e);lt=performance.now()};
+ w.onpointermove=e=>{if(ang===null||!S.drag)return;const n=a(e);let x=n-ang;if(x>Math.PI)x-=2*Math.PI;if(x<-Math.PI)x+=2*Math.PI;ang=n;const t=performance.now(),dt=(t-lt)/1000;lt=t;slice(x/(2*Math.PI)*1.8,dt)};
+ w.onpointerup=w.onpointercancel=()=>{if(!S.drag)return;S.drag=false;ang=null;if(S.was)go()};
+ $(root,".bar").onpointerdown=e=>{if(!S.buf)return;const r=e.currentTarget.getBoundingClientRect();seek((e.clientX-r.left)/r.width*dur())};
+ $(root,".url button").onclick=async()=>{const u=$(root,".url input").value.trim();if(!u)return;try{const ab=await (await fetch(u)).arrayBuffer();await load(ab,decodeURIComponent(u.split("?")[0].split("/").pop()||u));go()}catch(e){nm.textContent="Ese enlace no permite mezclar."}};
+ const api={cross,tg,fl,fxs,S,go,pause,load,dur,now,
+  eco(on){fxs.eco(on);$(root,'[data-f="eco"]').classList.toggle("on",on)},
+  reset(){fl.type="lowpass";fl.frequency.cancelScheduledValues(0);fl.frequency.value=22000;$(root,".fl").value=0;tg.gain.cancelScheduledValues(0);tg.gain.value=1;api.eco(false)},
+  tick(){const t=now(),d=dur();if(S.play&&t>=d-.03){S.play=false;stopSrc();S.p0=d;S.ended=true}
+   w.style.transform=`rotate(${t*200}deg)`;$(root,".bar u").style.width=(d?t/d*100:0)+"%";$(root,".tm").textContent=fmt(t)+" / "+fmt(d);const p=$(root,".play");p.textContent=S.play?"Pausa":"Play";p.classList.toggle("on",S.play)}};
+ return api
 }
 const D=all(document,".deck").map(deck);
 const cf=document.getElementById("cf");
@@ -149,7 +179,8 @@ function drawBg(){const W=cv2.width,H=cv2.height;cx.clearRect(0,0,W,H);if(bgm==3
  if(bgm==1){cx.globalAlpha=.5;cx.lineWidth=6;for(let k=0;k<4;k++){cx.strokeStyle=`hsl(${hue+k*60},95%,60%)`;cx.beginPath();cx.arc(W/2,H/2,(k+1)*Math.min(W,H)*.1*(1+bass*1.5),0,7);cx.stroke()}}
  if(bgm==2){cx.globalAlpha=Math.min(.35,bass*.5);cx.fillStyle=`hsl(${hue},90%,50%)`;cx.fillRect(0,0,W,H)}
  cx.globalAlpha=1}
-(function loop(){D.forEach(d=>d.tick());drawBg();requestAnimationFrame(loop)})();
+addEventListener("pointerdown",()=>AC.resume(),{passive:true});
+let fr=0;(function loop(){D.forEach(d=>d.tick());auto();if(++fr%2)drawBg();requestAnimationFrame(loop)})();
 
 function tone(ty,f1,f2,d,v,at=0){const t=AC.currentTime+at,o=AC.createOscillator(),g=gn(v);o.type=ty;o.frequency.setValueAtTime(f1,t);o.frequency.exponentialRampToValueAtTime(f2,t+d);g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(g);g.connect(master);o.start(t);o.stop(t+d)}
 function noise(d,ft,f,v,at=0){const t=AC.currentTime+at,n=Math.floor(AC.sampleRate*d),b=AC.createBuffer(1,n,AC.sampleRate),c=b.getChannelData(0);for(let i=0;i<n;i++)c[i]=(Math.random()*2-1)*Math.pow(1-i/n,3);const s=AC.createBufferSource(),fl=bq(ft,f),g=gn(v);s.buffer=b;s.connect(fl);fl.connect(g);g.connect(master);s.start(t)}
@@ -157,13 +188,14 @@ const SND=[["Bombo",()=>tone("sine",160,40,.4,1.2)],["Caja",()=>{noise(.2,"bandp
 ["Láser",()=>tone("square",2000,80,.3,.3)],["Sirena",()=>{tone("sawtooth",500,1200,.4,.25);tone("sawtooth",1200,500,.4,.25,.4)}],["Bocina",()=>{tone("sawtooth",440,438,.7,.25);tone("sawtooth",554,552,.7,.25)}],["Subidón",()=>tone("sawtooth",200,2000,1.5,.2)],
 ["Caída",()=>tone("sine",800,30,.8,.7)],["Moneda",()=>{tone("square",988,987,.08,.2);tone("square",1319,1318,.35,.2,.08)}],["Zap",()=>tone("sawtooth",3000,200,.12,.3)],["Tom",()=>tone("sine",220,80,.35,.9)],
 ["Explosión",()=>noise(1.2,"lowpass",400,1.4)],["Burbuja",()=>tone("sine",300,900,.15,.6)],["Robot",()=>tone("square",110,55,.5,.3)],["Platillo",()=>noise(.9,"highpass",5000,.6)]];
-document.body.insertAdjacentHTML("beforeend",`<aside class="dr" id="dr" aria-label="Efectos de sonido"><h2>Efectos de sonido<button id="xFx">Cerrar</button></h2><div class="ed"><button id="edFx">Editar sonidos</button><button id="rsFx">Restablecer</button></div><p class="hint" id="edMsg">Toca un botón para escuchar su sonido.</p><input id="pk" type="file" accept="audio/*" style="position:absolute;opacity:0;width:1px;height:1px" aria-hidden="true" tabindex="-1"><div class="pg">${SND.map((s,i)=>`<button data-s="${i}">${s[0]}</button>`).join("")}</div></aside>`);
+document.body.insertAdjacentHTML("beforeend",`<aside class="dr" id="dr" aria-label="Efectos de sonido"><h2>Efectos de sonido<button id="xFx">Cerrar</button></h2><div class="ed"><button id="edFx">Editar sonidos</button><button id="rsFx">Restablecer</button></div><p class="hint" id="edMsg">Toca un botón para escuchar su sonido.</p><input id="pk" type="file" accept="audio/*" style="position:absolute;opacity:0;width:1px;height:1px" aria-hidden="true" tabindex="-1"><div class="ed" id="pe" hidden><input id="pn" maxlength="10" placeholder="Nombre o emoji"><button id="ps">Elegir sonido</button></div><div class="pg">${SND.map((s,i)=>`<button data-s="${i}">${s[0]}</button>`).join("")}</div><h2 style="margin-top:14px">Voces DJ</h2><div id="vc"></div></aside>`);
 const dr=document.getElementById("dr");
 document.getElementById("openFx").onclick=()=>dr.classList.add("open");
 document.getElementById("xFx").onclick=()=>dr.classList.remove("open");
 const CS={},pk=document.getElementById("pk"),msg=document.getElementById("edMsg");
 let edit=false,pickI=null;
-const lab=i=>{const b=dr.querySelector(`[data-s="${i}"]`);b.textContent=CS[i]?CS[i].name:SND[i][0];b.classList.toggle("cu",!!CS[i])};
+let NM={};try{NM=JSON.parse(localStorage.getItem("pdj_n")||"{}")}catch(e){}
+const lab=i=>{const b=dr.querySelector(`[data-s="${i}"]`);b.textContent=NM[i]||(CS[i]?CS[i].name:SND[i][0]);b.classList.toggle("cu",!!CS[i])};
 async function setCS(i,blob,name){const buf=await AC.decodeAudioData(await blob.arrayBuffer());CS[i]={buf,name:name.replace(/\.[^.]+$/,"").slice(0,10)};lab(i)}
 const idb=()=>new Promise((ok,no)=>{const r=indexedDB.open("pdj",1);r.onupgradeneeded=()=>r.result.createObjectStore("s");r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)});
 const rq=r=>new Promise(o=>{r.onsuccess=()=>o(r.result);r.onerror=()=>o(null)});
@@ -171,11 +203,41 @@ async function put(i,blob,name){try{(await idb()).transaction("s","readwrite").o
 async function loadAll(){try{const d=await idb(),ks=await rq(d.transaction("s").objectStore("s").getAllKeys());for(const k of ks){const v=await rq(d.transaction("s").objectStore("s").get(k));if(v)await setCS(k,v.blob,v.name)}}catch(e){}}
 all(dr,"[data-s]").forEach(b=>{const i=+b.dataset.s;
  b.onpointerdown=()=>{if(edit)return;AC.resume();if(CS[i]){const s=AC.createBufferSource();s.buffer=CS[i].buf;s.connect(master);s.start()}else SND[i][1]()};
- b.onclick=()=>{if(!edit)return;pickI=i;pk.value="";pk.click()}});
+ b.onclick=()=>{if(!edit)return;pickI=i;pe.hidden=false;pn.value=NM[i]||"";msg.textContent="Pad "+(i+1)+": cambia el nombre o elige un sonido."}});
+const pe=document.getElementById("pe"),pn=document.getElementById("pn"),ps=document.getElementById("ps");
+ps.onclick=()=>{if(pickI===null)return;pk.value="";pk.click()};
+pn.oninput=()=>{if(pickI===null)return;NM[pickI]=pn.value;try{localStorage.setItem("pdj_n",JSON.stringify(NM))}catch(e){}lab(pickI)};
+SND.forEach((_,i)=>lab(i));
 pk.onchange=async()=>{const f=pk.files[0];if(!f||pickI===null)return;try{await setCS(pickI,f,f.name);put(pickI,f,f.name);msg.textContent="Listo: "+f.name}catch(e){msg.textContent="No se pudo leer ese audio. Prueba con un mp3 o wav."}};
-document.getElementById("edFx").onclick=e=>{edit=!edit;dr.classList.toggle("edit",edit);e.target.textContent=edit?"Listo":"Editar sonidos";msg.textContent=edit?"Toca un botón y elige el audio que quieres ponerle.":"Toca un botón para escuchar su sonido."};
-document.getElementById("rsFx").onclick=async()=>{try{(await idb()).transaction("s","readwrite").objectStore("s").clear()}catch(e){}Object.keys(CS).forEach(k=>{delete CS[k];lab(k)});msg.textContent="Sonidos originales restablecidos."};
+document.getElementById("edFx").onclick=e=>{edit=!edit;if(!edit)pe.hidden=true;dr.classList.toggle("edit",edit);e.target.textContent=edit?"Listo":"Editar sonidos";msg.textContent=edit?"Toca un botón y elige el audio que quieres ponerle.":"Toca un botón para escuchar su sonido."};
+document.getElementById("rsFx").onclick=async()=>{try{(await idb()).transaction("s","readwrite").objectStore("s").clear()}catch(e){}Object.keys(CS).forEach(k=>{delete CS[k]});NM={};try{localStorage.removeItem("pdj_n")}catch(e){}SND.forEach((_,i)=>lab(i));msg.textContent="Sonidos originales restablecidos."};
+let V=["Soy DJ","¡Dale que dale!","¡Aquí está el DJ!"];try{V=JSON.parse(localStorage.getItem("pdj_v"))||V}catch(e){}
+V.forEach((t,i)=>{const r=document.createElement("div");r.className="url";r.innerHTML=`<input maxlength="40" aria-label="Frase ${i+1}"><button>Decir</button>`;const f=r.firstChild;f.value=t;f.oninput=()=>{V[i]=f.value;try{localStorage.setItem("pdj_v",JSON.stringify(V))}catch(e){}};r.lastChild.onclick=()=>{try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(f.value);u.lang="es-MX";u.pitch=.6;u.rate=.95;speechSynthesis.speak(u)}catch(e){}};document.getElementById("vc").appendChild(r)});
+const qf=document.getElementById("qf"),ts=document.getElementById("ts"),am=document.getElementById("am"),trb=document.getElementById("tr");
+const TR=["Al azar","Fundido","Filtro","Eco"];
+ts.innerHTML='<option value="-1">Ninguno</option>'+SND.map((x,i)=>`<option value="${i}">${x[0]}</option>`).join("");
+ts.onchange=()=>tsel=+ts.value;
+qf.onchange=()=>{[...qf.files].forEach(f=>Q.push({file:f,name:f.name}));qf.value="";qDraw()};
+am.onclick=()=>{autoOn=!autoOn;am.classList.toggle("on",autoOn);am.textContent="Auto-mezcla: "+(autoOn?"SÍ":"NO")};
+trb.onclick=()=>{trm=(trm+1)%4;trb.textContent="Transición: "+TR[trm]};
+document.getElementById("qc").onclick=()=>{Q.length=0;qDraw()};
 loadAll();
+function qDraw(){document.getElementById("ql").textContent=Q.length?"En cola: "+Q.map((q,i)=>(i+1)+". "+q.name).join("  ·  "):"Cola vacía. Agrega canciones."}
+async function qLoad(d){const n=Q.shift();qDraw();if(!n)return false;await d.load(await n.file.arrayBuffer(),n.name);return true}
+const ramp=(p,v,t)=>{p.cancelScheduledValues(0);p.setValueAtTime(p.value,AC.currentTime);p.linearRampToValueAtTime(v,AC.currentTime+t)};
+function mixOut(a,b){busy=true;const sty=trm?trm:1+Math.floor(Math.random()*3),T=Math.max(3,Math.min(10,a.dur()-a.now()-.3)),t=AC.currentTime;
+ if(tsel>=0)SND[tsel][1]();
+ if(sty==3){a.eco(true);setTimeout(()=>{a.pause();b.go()},T*750)}
+ else{b.tg.gain.value=0;b.go();ramp(a.tg.gain,0,T);
+  if(sty==1)ramp(b.tg.gain,1,T);
+  else{a.fl.type="lowpass";a.fl.frequency.setValueAtTime(20000,t);a.fl.frequency.exponentialRampToValueAtTime(180,t+T);b.fl.type="highpass";b.fl.frequency.setValueAtTime(2500,t);b.fl.frequency.exponentialRampToValueAtTime(20,t+T);ramp(b.tg.gain,1,T*.6)}}
+ setTimeout(()=>{a.pause();a.S.ended=false;a.reset();b.reset();busy=false},T*1000+(sty==3?2500:400))}
+function auto(){if(!autoOn){D.forEach(x=>x.S.ended=false);return}if(busy)return;
+ for(let i=0;i<2;i++){const a=D[i],o=D[1-i],S=a.S;
+  if(S.ended){S.ended=false;if(!o.S.play&&Q.length)qLoad(a).then(r=>r&&a.go());continue}
+  const rem=a.dur()-a.now();
+  if(S.play&&rem<=25&&!o.S.play&&!o.pre&&!pre&&Q.length)pre=qLoad(o).then(r=>{o.pre=r;pre=null});
+  if(S.play&&rem<=10&&o.pre&&!o.S.play){o.pre=false;mixOut(a,o);return}}}
 const BG=["Barras","Aros","Luces","Apagado"],bgBtn=document.getElementById("bgBtn");
 bgBtn.textContent="Fondo: "+BG[bgm];
 bgBtn.onclick=()=>{bgm=(bgm+1)%4;bgBtn.textContent="Fondo: "+BG[bgm]};
