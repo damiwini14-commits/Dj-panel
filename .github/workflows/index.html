@@ -26,7 +26,8 @@ background:radial-gradient(circle,var(--k) 0 22%,#120a22 23% 25%,transparent 26%
 .bar{height:14px;background:#120a22;border-radius:7px;overflow:hidden;cursor:pointer;touch-action:none}
 .bar u{display:block;height:100%;width:0;background:var(--k)}
 .tm{display:block;text-align:right;color:var(--mut);margin:2px 2px 8px}
-.row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+.row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+.deck header button{min-height:36px;padding:0 10px;font-size:12px}
 .mix{display:grid;grid-template-columns:1fr 52px 52px;gap:10px;align-items:stretch}
 .eq{display:grid;gap:6px;align-content:space-between}
 label.s{display:grid;gap:2px;color:var(--mut);font-size:12px}
@@ -62,6 +63,7 @@ input[type=range]{width:100%;accent-color:var(--k);height:28px;margin:0}
 .q select{width:100%;height:40px;border-radius:10px;border:0;background:#120a22;color:var(--ink);font:inherit;padding:0 8px}
 .q .tools{margin:8px 0;grid-template-columns:1fr 1fr 1fr}.q .tools button{font-size:12px;padding:8px 4px}
 .q .fi{margin-top:8px}
+#tl{width:100%;height:170px;display:block;border-radius:12px;background:#120a22;margin-bottom:8px}
 </style></head>
 <body>
 <canvas id="bg"></canvas>
@@ -77,16 +79,16 @@ const bq=(t,f,g=0)=>{const n=AC.createBiquadFilter();n.type=t;n.frequency.value=
 const gn=v=>{const n=AC.createGain();n.gain.value=v;return n};
 function ir(){const n=AC.sampleRate*2,b=AC.createBuffer(2,n,AC.sampleRate);for(let c=0;c<2;c++){const d=b.getChannelData(c);for(let i=0;i<n;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/n,3)}return b}
 const IR=ir();
-const Q=[];let autoOn=false,trm=0,busy=false,pre=null,tsel=-1;
+const Q=[];let autoOn=false,trm=0,busy=false,pre=null,tsel=-1,mixStart=10,mixLen=10,inAt=0,zoomS=16,qz=false,slipOn=false,lastGo=0;
 const T=(p,v)=>p.setTargetAtTime(v,AC.currentTime,.02);
 const fmt=s=>isFinite(s)?Math.floor(s/60)+":"+String(Math.floor(s%60)).padStart(2,"0"):"0:00";
 
-const tpl=(L,c)=>`<section class="deck ${c}"><header><b>${L}</b><span class="nm">Sin canción</span></header>
+const tpl=(L,c)=>`<section class="deck ${c}"><header><b>${L}</b><span class="nm">Sin canción</span><button class="vz">Voz: normal</button></header>
 <input class="fi" type="file" accept="audio/*" aria-label="Cargar canción">
 <div class="url"><input type="url" placeholder="Pega un enlace directo a un .mp3" aria-label="Enlace de audio"><button>Ir</button></div>
 <div class="pl"><div class="wheel"><i></i></div></div>
 <div class="bar"><u></u></div><small class="tm">0:00</small>
-<div class="row"><button class="cue">Cue</button><button class="play">Play</button><button class="brk">Freno</button></div>
+<div class="row"><button class="cue">Cue</button><button class="play">Play</button><button class="brk">Freno</button><button class="syn">Sync</button></div>
 <div class="mix"><div class="eq">
 <label class="s">Graves<input class="lo" type="range" min="-18" max="12" value="0"></label>
 <label class="s">Medios<input class="mi" type="range" min="-18" max="12" value="0"></label>
@@ -97,17 +99,38 @@ const tpl=(L,c)=>`<section class="deck ${c}"><header><b>${L}</b><span class="nm"
 <div class="fx"><button data-f="eco">Eco</button><button data-f="rev">Reverb</button><button data-f="fla">Flanger</button><button data-f="gate">Trance</button></div></section>`;
 
 const app=document.getElementById("app");
-app.innerHTML=`<section class="tools"><button id="openFx">Efectos</button><button id="bgBtn">Fondo</button></section>`+tpl("A","a")+tpl("B","b")+
+app.innerHTML=`<section class="tools"><button id="openFx">Efectos</button><button id="bgBtn">Fondo</button></section>`+`<section class="cross q" style="--k:var(--c)"><canvas id="tl" aria-label="Línea de tiempo"></canvas>
+<label class="s">Empezar a mezclar a falta de <b id="v1">10</b> s<input id="smx" type="range" min="5" max="60" value="10"></label>
+<label class="s">Duración de la transición <b id="v2">10</b> s<input id="sml" type="range" min="3" max="30" value="10"></label>
+<label class="s">La siguiente entra desde el segundo <b id="v3">0</b><input id="smi" type="range" min="0" max="120" value="0"></label>
+<label class="s">Zoom <b id="v4">16</b> s<input id="szm" type="range" min="4" max="40" value="16"></label>
+<section class="tools"><button id="qz">Quantize: NO</button><button id="sl">Slip: NO</button></section>
+<p class="hint">Toca la línea de arriba para poner el punto de mezcla y la de abajo para el punto de entrada.</p></section>`+tpl("A","a")+tpl("B","b")+
 `<section class="cross"><div><span>A</span><span>Crossfader</span><span>B</span></div><input id="cf" type="range" min="0" max="100" value="50" style="width:100%"></section>
 <section class="cross q" style="--k:var(--c)"><b>Cola y auto-mezcla</b>
+<input id="qg" list="gl" maxlength="20" placeholder="Género de las canciones que agregues (ej. Cumbia)" style="width:100%;height:40px;border-radius:10px;border:0;padding:0 10px;margin-top:8px;background:#120a22;color:var(--ink);font:inherit"><datalist id="gl"><option value="Corrido tumbado"><option value="Cumbia"><option value="Reggaetón"><option value="Banda"><option value="Norteño"><option value="Salsa"><option value="Electrónica"></datalist>
 <input class="fi" id="qf" type="file" multiple accept="audio/*">
 <p class="hint" id="ql">Cola vacía. Agrega canciones.</p>
-<section class="tools"><button id="am">Auto-mezcla: NO</button><button id="tr">Transición: Al azar</button><button id="qc">Vaciar cola</button></section>
+<section class="tools"><button id="am">Auto-mezcla: NO</button><button id="tr">Transición: Inteligente</button><button id="qc">Vaciar cola</button></section><section class="tools" style="grid-template-columns:1fr;margin-top:0"><button id="qa">Alternar géneros en la cola</button></section>
 <label class="s">Sonido al empezar la transición<select id="ts"></select></label></section>
+<section class="cross q" style="--k:var(--c)"><b>Secuenciador de ritmos</b><div id="sq" style="display:grid;gap:4px;margin:8px 0"></div>
+<p class="hint">Filas: Bombo, Caja, Hi-hat, Palmas (usan tus sonidos si los cambiaste)</p>
+<section class="tools" style="grid-template-columns:1fr 1fr"><button id="sp">Iniciar</button><label class="s">BPM <b id="bv">120</b><input id="sb" type="range" min="60" max="180" value="120"></label></section></section>
 `;
 
+function analyze(b){const x=b.getChannelData(0),n=x.length,N=2400,pk=new Float32Array(N),st=Math.max(1,Math.floor(n/N));let mx=.01;
+ for(let i=0;i<N;i++){let m=0;for(let j=i*st;j<(i+1)*st&&j<n;j+=8){const v=Math.abs(x[j]);if(v>m)m=v}pk[i]=m;if(m>mx)mx=m}
+ const hop=512,E=[];for(let i=0;i+hop<n;i+=hop){let q=0;for(let j=i;j<i+hop;j+=4)q+=x[j]*x[j];E.push(Math.sqrt(q/128))}
+ const O=E.map((v,i)=>i?Math.max(0,v-E[i-1]):0),fps=b.sampleRate/hop;let best=0,bl=0;
+ for(let l=Math.floor(fps*60/180);l<=Math.ceil(fps*60/70);l++){let c=0;for(let i=l;i<O.length;i++)c+=O[i]*O[i-l];if(c>best){best=c;bl=l}}
+ let bo=0,bs=0;for(let o=0;o<bl;o++){let q=0;for(let i=o;i<O.length;i+=bl)q+=O[i];if(q>bs){bs=q;bo=o}}
+ return{pk,mx,bpm:bl?Math.round(600*fps/bl)/10:0,off:bl?bo/fps:0}}
 function deck(root){
- const inp=gn(1),sg=gn(1);sg.connect(inp);
+ const inp=gn(1),sg=gn(1);
+ const gN=gn(1),gV=gn(0),gK=gn(0),sp=AC.createChannelSplitter(2),mid=gn(1),side=gn(1),hp=bq("highpass",180),lp=bq("lowpass",7000);
+ sg.connect(gN);gN.connect(inp);sg.connect(sp);
+ [[0,.5,mid],[1,.5,mid],[0,.5,side],[1,-.5,side]].forEach(([c,k,t])=>{const x=gn(k);sp.connect(x,c);x.connect(t)});
+ mid.connect(hp);hp.connect(lp);lp.connect(gV);gV.connect(inp);side.connect(gK);gK.connect(inp);
  const lo=bq("lowshelf",200),mi=bq("peaking",1000),hi=bq("highshelf",3500),fl=bq("lowpass",22000);
  mi.Q.value=1;
  inp.connect(lo);lo.connect(mi);mi.connect(hi);hi.connect(fl);
@@ -124,13 +147,14 @@ function deck(root){
  const nm=$(root,".nm"),dur=()=>S.buf?S.buf.duration:0;
  const now=()=>S.buf?(S.play&&S.src?Math.max(0,Math.min(dur(),S.p0+(AC.currentTime-S.t0)*S.cur)):S.p0):0;
  const rate=()=>1+$(root,".pt").value/100;
+ const snap=t=>qz&&S.bpm?Math.round((t-S.off)/(60/S.bpm))*(60/S.bpm)+S.off:t;
  const stopSrc=()=>{if(S.src){try{S.src.stop()}catch(e){}S.src.disconnect();S.src=null}};
  const startSrc=r=>{stopSrc();const s=AC.createBufferSource();s.buffer=S.buf;s.playbackRate.value=r;s.connect(sg);s.start(0,S.p0);S.src=s;S.t0=AC.currentTime;S.cur=r};
- const go=()=>{if(!S.buf)return;AC.resume();if(S.p0>=dur()-.05)S.p0=0;S.ended=false;S.play=true;startSrc(rate())};
+ const go=()=>{if(!S.buf)return;lastGo=D.indexOf(api);AC.resume();if(S.p0>=dur()-.05)S.p0=0;S.ended=false;S.play=true;startSrc(rate())};
  const pause=()=>{S.p0=now();S.play=false;stopSrc()};
  const chg=r=>{if(S.src){S.p0=now();S.t0=AC.currentTime;S.cur=r;S.src.playbackRate.value=r}};
- const seek=t=>{S.p0=Math.max(0,Math.min(dur()-.05,t));if(S.play)startSrc(rate())};
- const load=async(ab,name)=>{nm.textContent="Cargando…";try{pause();const b=await AC.decodeAudioData(ab);S.buf=b;S.rev=null;S.p0=0;S.cue=0;S.play=false;S.ended=false;nm.textContent=name}catch(e){nm.textContent="No se pudo leer ese audio"}};
+ const seek=t=>{S.p0=Math.max(0,Math.min(dur()-.05,snap(t)));if(S.play)startSrc(rate())};
+ const load=async(ab,name)=>{nm.textContent="Cargando…";try{pause();const b=await AC.decodeAudioData(ab);S.buf=b;S.rev=null;S.p0=0;S.cue=0;S.play=false;S.ended=false;S.genre="";const A=analyze(b);S.pk=A.pk;S.mx=A.mx;S.bpm=A.bpm;S.off=A.off;nm.textContent=name+(A.bpm?" · "+A.bpm+" BPM":"")}catch(e){nm.textContent="No se pudo leer ese audio"}};
  const mkRev=()=>{if(S.rev||!S.buf)return;const b=S.buf,r=AC.createBuffer(b.numberOfChannels,b.length,b.sampleRate);for(let c=0;c<b.numberOfChannels;c++){const x=b.getChannelData(c),y=r.getChannelData(c);for(let i=0,n=x.length;i<n;i++)y[i]=x[n-1-i]}S.rev=r};
  const slice=(ds,dt)=>{const a=Math.abs(ds);if(!S.buf||a<.002||dt<=0)return;
   const r=Math.min(6,Math.max(.1,a/dt)),fw=ds>0,p=S.p0,t=AC.currentTime,L=Math.min(a*1.2,fw?dur()-p:p);if(L<=0)return;
@@ -139,7 +163,7 @@ function deck(root){
   s.start(t,fw?p:dur()-p,L);S.p0=Math.max(0,Math.min(dur(),p+ds))};
  $(root,'input[type=file]').onchange=async e=>{const f=e.target.files[0];if(f)await load(await f.arrayBuffer(),f.name)};
  $(root,".play").onclick=async()=>{AC.resume();if(!S.buf){if(await qLoad(api))go();return}S.play?pause():go()};
- $(root,".cue").onclick=()=>{if(!S.buf)return;if(!S.play)S.cue=S.p0;else{pause();S.p0=S.cue}};
+ $(root,".cue").onclick=()=>{if(!S.buf)return;if(!S.play)S.cue=snap(S.p0);else{pause();S.p0=S.cue}};
  let br=null,bw=false;
  const stopBr=()=>{if(br){clearInterval(br);br=null;if(bw)go();bw=false}};
  const brk=$(root,".brk");
@@ -154,12 +178,20 @@ function deck(root){
  $(root,".fl").oninput=e=>{const v=e.target.value/100;if(v<0){fl.type="lowpass";fl.frequency.value=20000*Math.pow(.01,-v)}else if(v>0){fl.type="highpass";fl.frequency.value=20*Math.pow(150,v)}else{fl.type="lowpass";fl.frequency.value=22000}};
  const w=$(root,".wheel");let ang=null,lt=0;
  const a=e=>{const r=w.getBoundingClientRect();return Math.atan2(e.clientY-r.top-r.height/2,e.clientX-r.left-r.width/2)};
- w.onpointerdown=e=>{AC.resume();if(!S.buf)return;w.setPointerCapture(e.pointerId);mkRev();S.was=S.play;pause();S.drag=true;ang=a(e);lt=performance.now()};
+ w.onpointerdown=e=>{AC.resume();if(!S.buf)return;w.setPointerCapture(e.pointerId);mkRev();S.sh=slipOn&&S.play?{p:now(),t:AC.currentTime,r:S.cur}:null;S.was=S.play;pause();S.drag=true;ang=a(e);lt=performance.now()};
  w.onpointermove=e=>{if(ang===null||!S.drag)return;const n=a(e);let x=n-ang;if(x>Math.PI)x-=2*Math.PI;if(x<-Math.PI)x+=2*Math.PI;ang=n;const t=performance.now(),dt=(t-lt)/1000;lt=t;slice(x/(2*Math.PI)*1.8,dt)};
- w.onpointerup=w.onpointercancel=()=>{if(!S.drag)return;S.drag=false;ang=null;if(S.was)go()};
+ w.onpointerup=w.onpointercancel=()=>{if(!S.drag)return;S.drag=false;ang=null;if(S.sh){S.p0=Math.min(dur()-.1,S.sh.p+(AC.currentTime-S.sh.t)*S.sh.r);S.sh=null}if(S.was)go()};
  $(root,".bar").onpointerdown=e=>{if(!S.buf)return;const r=e.currentTarget.getBoundingClientRect();seek((e.clientX-r.left)/r.width*dur())};
  $(root,".url button").onclick=async()=>{const u=$(root,".url input").value.trim();if(!u)return;try{const ab=await (await fetch(u)).arrayBuffer();await load(ab,decodeURIComponent(u.split("?")[0].split("/").pop()||u));go()}catch(e){nm.textContent="Ese enlace no permite mezclar."}};
- const api={cross,tg,fl,fxs,S,go,pause,load,dur,now,
+ let vmode=0;const vz=$(root,".vz");
+ vz.onclick=()=>{vmode=(vmode+1)%3;T(gN.gain,vmode?0:1);T(gV.gain,vmode==1?1.5:0);T(gK.gain,vmode==2?1.6:0);vz.textContent=["Voz: normal","Solo voz","Sin voz"][vmode];vz.classList.toggle("on",vmode>0)};
+ $(root,".syn").onclick=()=>{const o=D[1-D.indexOf(api)];if(!S.bpm||!o.S.bpm){nm.textContent="Sync: falta cargar ambas canciones";return}
+  const tb=o.S.bpm*(o.S.play?o.S.cur:o.rate());let bs=99,pv=0,mm=1;[1,2,.5].forEach(k=>{const v=(tb*k/S.bpm-1)*100;if(Math.abs(v)<bs){bs=Math.abs(v);pv=v;mm=k}});
+  if(bs>12){nm.textContent="Sync: el ritmo es muy distinto";return}api.setPitch(pv);
+  if(mm==1&&o.S.play){const ph=(((o.now()-o.S.off)/(60/o.S.bpm))%1+1)%1,bm=60/S.bpm,k=Math.round((now()-S.off)/bm-ph);S.p0=Math.max(0,Math.min(dur()-.05,S.off+(k+ph)*bm));if(S.play)startSrc(rate())}};
+ const api={cross,tg,fl,fxs,S,go,pause,load,dur,now,rate,
+  setPitch(v){$(root,".pt").value=v;if(S.play)chg(rate())},
+  spin(){if(!S.buf)return;mkRev();const p=now();if(p<.2)return;pause();const x=AC.createBufferSource(),g=gn(1),t=AC.currentTime;x.buffer=S.rev;x.connect(g);g.connect(sg);x.playbackRate.setValueAtTime(3.5,t);x.playbackRate.exponentialRampToValueAtTime(.4,t+.9);g.gain.setValueAtTime(1,t+.6);g.gain.linearRampToValueAtTime(0,t+.9);x.start(t,dur()-p,Math.min(p,3));setTimeout(()=>{try{x.stop()}catch(e){}},1000)},
   eco(on){fxs.eco(on);$(root,'[data-f="eco"]').classList.toggle("on",on)},
   reset(){fl.type="lowpass";fl.frequency.cancelScheduledValues(0);fl.frequency.value=22000;$(root,".fl").value=0;tg.gain.cancelScheduledValues(0);tg.gain.value=1;api.eco(false)},
   tick(){const t=now(),d=dur();if(S.play&&t>=d-.03){S.play=false;stopSrc();S.p0=d;S.ended=true}
@@ -180,7 +212,7 @@ function drawBg(){const W=cv2.width,H=cv2.height;cx.clearRect(0,0,W,H);if(bgm==3
  if(bgm==2){cx.globalAlpha=Math.min(.35,bass*.5);cx.fillStyle=`hsl(${hue},90%,50%)`;cx.fillRect(0,0,W,H)}
  cx.globalAlpha=1}
 addEventListener("pointerdown",()=>AC.resume(),{passive:true});
-let fr=0;(function loop(){D.forEach(d=>d.tick());auto();if(++fr%2)drawBg();requestAnimationFrame(loop)})();
+let fr=0;(function loop(){D.forEach(d=>d.tick());auto();if(++fr%2)drawBg();else drawTL();requestAnimationFrame(loop)})();
 
 function tone(ty,f1,f2,d,v,at=0){const t=AC.currentTime+at,o=AC.createOscillator(),g=gn(v);o.type=ty;o.frequency.setValueAtTime(f1,t);o.frequency.exponentialRampToValueAtTime(f2,t+d);g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(g);g.connect(master);o.start(t);o.stop(t+d)}
 function noise(d,ft,f,v,at=0){const t=AC.currentTime+at,n=Math.floor(AC.sampleRate*d),b=AC.createBuffer(1,n,AC.sampleRate),c=b.getChannelData(0);for(let i=0;i<n;i++)c[i]=(Math.random()*2-1)*Math.pow(1-i/n,3);const s=AC.createBufferSource(),fl=bq(ft,f),g=gn(v);s.buffer=b;s.connect(fl);fl.connect(g);g.connect(master);s.start(t)}
@@ -213,32 +245,65 @@ document.getElementById("edFx").onclick=e=>{edit=!edit;if(!edit)pe.hidden=true;d
 document.getElementById("rsFx").onclick=async()=>{try{(await idb()).transaction("s","readwrite").objectStore("s").clear()}catch(e){}Object.keys(CS).forEach(k=>{delete CS[k]});NM={};try{localStorage.removeItem("pdj_n")}catch(e){}SND.forEach((_,i)=>lab(i));msg.textContent="Sonidos originales restablecidos."};
 let V=["Soy DJ","¡Dale que dale!","¡Aquí está el DJ!"];try{V=JSON.parse(localStorage.getItem("pdj_v"))||V}catch(e){}
 V.forEach((t,i)=>{const r=document.createElement("div");r.className="url";r.innerHTML=`<input maxlength="40" aria-label="Frase ${i+1}"><button>Decir</button>`;const f=r.firstChild;f.value=t;f.oninput=()=>{V[i]=f.value;try{localStorage.setItem("pdj_v",JSON.stringify(V))}catch(e){}};r.lastChild.onclick=()=>{try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(f.value);u.lang="es-MX";u.pitch=.6;u.rate=.95;speechSynthesis.speak(u)}catch(e){}};document.getElementById("vc").appendChild(r)});
-const qf=document.getElementById("qf"),ts=document.getElementById("ts"),am=document.getElementById("am"),trb=document.getElementById("tr");
-const TR=["Al azar","Fundido","Filtro","Eco"];
+const qg=document.getElementById("qg"),qf=document.getElementById("qf"),ts=document.getElementById("ts"),am=document.getElementById("am"),trb=document.getElementById("tr");
+const TR=["Inteligente","Fundido","Filtro","Eco","Giro"];
 ts.innerHTML='<option value="-1">Ninguno</option>'+SND.map((x,i)=>`<option value="${i}">${x[0]}</option>`).join("");
 ts.onchange=()=>tsel=+ts.value;
-qf.onchange=()=>{[...qf.files].forEach(f=>Q.push({file:f,name:f.name}));qf.value="";qDraw()};
+qf.onchange=()=>{[...qf.files].forEach(f=>Q.push({file:f,name:f.name,genre:qg.value.trim()}));qf.value="";qDraw()};
 am.onclick=()=>{autoOn=!autoOn;am.classList.toggle("on",autoOn);am.textContent="Auto-mezcla: "+(autoOn?"SÍ":"NO")};
-trb.onclick=()=>{trm=(trm+1)%4;trb.textContent="Transición: "+TR[trm]};
+trb.onclick=()=>{trm=(trm+1)%5;trb.textContent="Transición: "+TR[trm]};
 document.getElementById("qc").onclick=()=>{Q.length=0;qDraw()};
 loadAll();
-function qDraw(){document.getElementById("ql").textContent=Q.length?"En cola: "+Q.map((q,i)=>(i+1)+". "+q.name).join("  ·  "):"Cola vacía. Agrega canciones."}
-async function qLoad(d){const n=Q.shift();qDraw();if(!n)return false;await d.load(await n.file.arrayBuffer(),n.name);return true}
+function qDraw(){document.getElementById("ql").textContent=Q.length?"En cola: "+Q.map((q,i)=>(i+1)+". "+q.name+(q.genre?" ["+q.genre+"]":"")).join("  ·  "):"Cola vacía. Agrega canciones."}
+async function qLoad(d){const n=Q.shift();qDraw();if(!n)return false;await d.load(await n.file.arrayBuffer(),n.name);d.S.genre=n.genre||"";return true}
 const ramp=(p,v,t)=>{p.cancelScheduledValues(0);p.setValueAtTime(p.value,AC.currentTime);p.linearRampToValueAtTime(v,AC.currentTime+t)};
-function mixOut(a,b){busy=true;const sty=trm?trm:1+Math.floor(Math.random()*3),T=Math.max(3,Math.min(10,a.dur()-a.now()-.3)),t=AC.currentTime;
+function mixOut(a,b){busy=true;const gd=!!(a.S.genre&&b.S.genre&&a.S.genre!=b.S.genre);let m=null,pv=0;if(a.S.bpm&&b.S.bpm){const tb=a.S.bpm*a.S.cur;let bs=99;[1,2,.5].forEach(k=>{const vv=(tb*k/b.S.bpm-1)*100;if(Math.abs(vv)<bs){bs=Math.abs(vv);pv=vv;m=k}});if(bs>12)m=null}
+ const sty=trm?trm:(m&&!gd?1+Math.floor(Math.random()*2):3+Math.floor(Math.random()*2)),T=Math.max(3,Math.min(mixLen,a.dur()-a.now()-.3)),t=AC.currentTime;
  if(tsel>=0)SND[tsel][1]();
- if(sty==3){a.eco(true);setTimeout(()=>{a.pause();b.go()},T*750)}
+ b.S.p0=Math.min(inAt,Math.max(0,b.dur()-2));
+ b.setPitch(m?pv:0);
+ if(sty==4){a.spin();setTimeout(()=>b.go(),900)}
+ else if(sty==3){a.eco(true);setTimeout(()=>{a.pause();b.go()},T*750)}
  else{b.tg.gain.value=0;b.go();ramp(a.tg.gain,0,T);
   if(sty==1)ramp(b.tg.gain,1,T);
   else{a.fl.type="lowpass";a.fl.frequency.setValueAtTime(20000,t);a.fl.frequency.exponentialRampToValueAtTime(180,t+T);b.fl.type="highpass";b.fl.frequency.setValueAtTime(2500,t);b.fl.frequency.exponentialRampToValueAtTime(20,t+T);ramp(b.tg.gain,1,T*.6)}}
- setTimeout(()=>{a.pause();a.S.ended=false;a.reset();b.reset();busy=false},T*1000+(sty==3?2500:400))}
+ setTimeout(()=>{a.pause();a.S.ended=false;a.reset();b.reset();busy=false},sty==4?1500:T*1000+(sty==3?2500:400))}
 function auto(){if(!autoOn){D.forEach(x=>x.S.ended=false);return}if(busy)return;
  for(let i=0;i<2;i++){const a=D[i],o=D[1-i],S=a.S;
   if(S.ended){S.ended=false;if(!o.S.play&&Q.length)qLoad(a).then(r=>r&&a.go());continue}
   const rem=a.dur()-a.now();
-  if(S.play&&rem<=25&&!o.S.play&&!o.pre&&!pre&&Q.length)pre=qLoad(o).then(r=>{o.pre=r;pre=null});
-  if(S.play&&rem<=10&&o.pre&&!o.S.play){o.pre=false;mixOut(a,o);return}}}
+  if(S.play&&rem<=mixStart+15&&!o.S.play&&!o.pre&&!pre&&Q.length)pre=qLoad(o).then(r=>{o.pre=r;pre=null});
+  if(S.play&&rem<=mixStart&&o.pre&&!o.S.play){o.pre=false;mixOut(a,o);return}}}
+function lane(g,d,y,w,col,lb){const S=d.S,H=80,mid=y+H/2;g.font="11px sans-serif";
+ if(!S.buf){g.fillStyle="#a899c8";g.fillText(lb+": "+(lb=="Siguiente"&&Q.length?Q[0].name:"vacío"),8,mid);return}
+ const t=d.now(),pps=w/zoomS,N=S.pk.length,dr=S.buf.duration;
+ g.fillStyle=col;for(let x=0;x<w;x+=2){const q=t+(x-w/2)/pps;if(q<0||q>dr)continue;const a=S.pk[Math.floor(q/dr*(N-1))]/S.mx*(H/2-3);g.fillRect(x,mid-a,1.5,a*2+1)}
+ if(S.bpm){const b=60/S.bpm,k0=Math.ceil((t-zoomS/2-S.off)/b),k1=Math.floor((t+zoomS/2-S.off)/b);g.fillStyle="#fff";for(let k=k0;k<=k1;k++){if(S.off+k*b<0)continue;g.fillRect(w/2+(S.off+k*b-t)*pps,y,k%4?1:2,k%4?H*.14:H*.32)}}
+ g.fillStyle="#fff";g.fillRect(w/2-1,y,2,H);g.fillText(lb+(S.genre?" · "+S.genre:"")+" · "+(S.bpm||"?")+" BPM · "+fmt(t),8,y+H-6);return{t,pps,dr}}
+function drawTL(){const c=document.getElementById("tl"),w=c.clientWidth;if(!w)return;c.width=w;c.height=170;const g=c.getContext("2d"),a=D[lastGo],o=D[1-lastGo];
+ const r=lane(g,a,0,w,lastGo?"#3de8ff":"#ff3d81","Sonando");
+ if(r){const x=w/2+(r.dr-mixStart-r.t)*r.pps;g.fillStyle="#ffb93833";g.fillRect(x,0,w-x,80);g.fillStyle="#ffb938";g.fillRect(x,0,2,80);g.fillText("MEZCLA",x+4,12)}
+ const q=lane(g,o,90,w,lastGo?"#ff3d81":"#3de8ff","Siguiente");
+ if(q){const x=w/2+(inAt-q.t)*q.pps;g.fillStyle="#ffb938";g.fillRect(x,90,2,80);g.fillText("ENTRA",x+4,102)}}
+const tl=document.getElementById("tl"),smx=document.getElementById("smx"),sml=document.getElementById("sml"),smi=document.getElementById("smi"),szm=document.getElementById("szm");
+const sv=(sl,id,fn)=>sl.oninput=()=>{fn(+sl.value);document.getElementById(id).textContent=sl.value};
+sv(smx,"v1",v=>mixStart=v);sv(sml,"v2",v=>mixLen=v);sv(smi,"v3",v=>inAt=v);sv(szm,"v4",v=>zoomS=v);
+tl.onpointerdown=e=>{const r=tl.getBoundingClientRect(),y=e.clientY-r.top,x=e.clientX-r.left,d=y<85?D[lastGo]:D[1-lastGo];if(!d.S.buf)return;const t=d.now()+(x-r.width/2)/(r.width/zoomS);
+ if(y<85){mixStart=Math.max(5,Math.min(60,Math.round(d.dur()-t)));smx.value=mixStart;document.getElementById("v1").textContent=mixStart}
+ else if(y>=90){inAt=Math.max(0,Math.min(120,Math.round(t)));smi.value=inAt;document.getElementById("v3").textContent=inAt}};
+const qzb=document.getElementById("qz"),slb=document.getElementById("sl");
+qzb.onclick=()=>{qz=!qz;qzb.classList.toggle("on",qz);qzb.textContent="Quantize: "+(qz?"SÍ":"NO")};
+slb.onclick=()=>{slipOn=!slipOn;slb.classList.toggle("on",slipOn);slb.textContent="Slip: "+(slipOn?"SÍ":"NO")};
+const G=[0,1,2,3].map(()=>Array(16).fill(0)),sq=document.getElementById("sq"),sp=document.getElementById("sp"),sb=document.getElementById("sb");let sT=null,sPos=0;
+G.forEach((_,r)=>{const row=document.createElement("div");row.style.cssText="display:grid;grid-template-columns:repeat(16,1fr);gap:2px";for(let i=0;i<16;i++){const b=document.createElement("button");b.style.cssText="min-height:30px;padding:0;border-radius:6px";b.setAttribute("aria-label","Fila "+(r+1)+" paso "+(i+1));b.onclick=()=>{G[r][i]^=1;b.classList.toggle("on",!!G[r][i])};row.appendChild(b)}sq.appendChild(row)});
+const hit=i=>{if(CS[i]){const x=AC.createBufferSource();x.buffer=CS[i].buf;x.connect(master);x.start()}else SND[i][1]()};
+function stp(){const k=sPos%16;G.forEach((row,r)=>{sq.children[r].children[k].style.outline="2px solid #fff";sq.children[r].children[(k+15)%16].style.outline="";if(row[k])hit(r)});sPos++}
+const run=()=>{clearInterval(sT);sT=setInterval(stp,15000/sb.value)};
+sp.onclick=()=>{AC.resume();if(sT){clearInterval(sT);sT=null;sp.textContent="Iniciar";sp.classList.remove("on")}else{sPos=0;run();sp.textContent="Detener";sp.classList.add("on")}};
+sb.oninput=()=>{document.getElementById("bv").textContent=sb.value;if(sT)run()};
+document.getElementById("qa").onclick=()=>{const g={};Q.forEach(q=>(g[q.genre||"?"]=g[q.genre||"?"]||[]).push(q));const L=Object.values(g),r=[];while(L.some(l=>l.length))L.forEach(l=>l.length&&r.push(l.shift()));Q.length=0;Q.push(...r);qDraw()};
 const BG=["Barras","Aros","Luces","Apagado"],bgBtn=document.getElementById("bgBtn");
 bgBtn.textContent="Fondo: "+BG[bgm];
 bgBtn.onclick=()=>{bgm=(bgm+1)%4;bgBtn.textContent="Fondo: "+BG[bgm]};
+all(document.getElementById("vc"),"button").forEach((b,i)=>{b.onclick=async()=>{const t=V[i]||"";const P=window.Capacitor&&Capacitor.Plugins&&Capacitor.Plugins.TextToSpeech;try{if(P){try{await P.stop()}catch(e){}await P.speak({text:t,lang:"es-MX",rate:.95,pitch:.7,volume:1})}else{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang="es-MX";speechSynthesis.speak(u)}}catch(e){msg.textContent="No pude decir la frase. Revisa que tu celular tenga la voz de texto a voz activada."}}});
 </script></body></html>
