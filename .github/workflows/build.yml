@@ -16,11 +16,23 @@ jobs:
           distribution: temurin
           java-version: 21
       - run: mkdir -p www && cp "$(find . -iname 'index.html*' -not -path './.git/*' | head -n 1)" www/index.html
-      - run: npm init -y && npm install @capacitor/core@7 @capacitor/cli@7 @capacitor/android@7
+      - run: npm init -y && npm install @capacitor/core@7 @capacitor/cli@7 @capacitor/android@7 @capacitor-community/text-to-speech@6
       - run: npx cap init "Panel DJ" com.paneldj.app --web-dir www
       - run: npx cap add android
       - run: npx cap sync android
-      - run: chmod +x android/gradlew && cd android && ./gradlew assembleDebug
+      - run: |
+          mkdir -p ~/.gradle
+          cat > ~/.gradle/init.gradle <<'EOF'
+          allprojects {
+            buildscript { repositories { maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' } } }
+            repositories { maven { url 'https://maven-central.storage-download.googleapis.com/maven2/' } }
+          }
+          EOF
+      - run: |
+          chmod +x android/gradlew
+          cd android
+          for i in 1 2 3 4; do ./gradlew assembleDebug --no-daemon && exit 0; echo "Reintento $i"; sleep 45; done
+          exit 1
       - uses: actions/upload-artifact@v4
         with:
           name: panel-dj-apk
